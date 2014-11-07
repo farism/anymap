@@ -8,7 +8,8 @@
 #[cfg(test)]
 extern crate test;
 
-use std::any::Any;
+//use std::any::Any;
+pub use with_clone::Any;
 use std::intrinsics::{forget, TypeId};
 use std::collections::HashMap;
 use std::collections::hash_map;
@@ -16,8 +17,10 @@ use std::hash::{Hash, Hasher, Writer};
 use std::mem::transmute;
 use std::raw::TraitObject;
 
+#[derive(Clone)]
 struct TypeIdHasher;
 
+#[derive(Clone)]
 struct TypeIdState {
     value: u64,
 }
@@ -102,6 +105,32 @@ impl UncheckedBoxAny for Box<Any + 'static> {
     }
 }
 
+mod with_clone {
+    #[doc(hidden)]
+    pub trait CloneToAny {
+        /// Clone `self` into a new `Box<Any>` object.
+        fn clone_to_any(&self) -> Box<Any>;
+    }
+
+    impl<T: 'static + Clone> CloneToAny for T {
+        fn clone_to_any(&self) -> Box<Any> {
+            box self.clone()
+        }
+    }
+
+    #[doc(hidden)]
+    /// Pretty much just `std::any::Any + Clone`.
+    pub trait Any: ::std::any::Any + CloneToAny { }
+
+    impl<T: 'static + Clone> Any for T { }
+
+    impl Clone for Box<Any> {
+        fn clone(&self) -> Box<Any> {
+            (**self).clone_to_any()
+        }
+    }
+}
+
 /// A map containing zero or one values for any given type and allowing convenient,
 /// type-safe access to those values.
 ///
@@ -114,7 +143,7 @@ impl UncheckedBoxAny for Box<Any + 'static> {
 /// data.remove::<int>();
 /// assert_eq!(data.get::<int>(), None);
 ///
-/// #[derive(PartialEq, Show)]
+/// #[derive(Clone, PartialEq, Show)]
 /// struct Foo {
 ///     str: String,
 /// }
@@ -127,6 +156,7 @@ impl UncheckedBoxAny for Box<Any + 'static> {
 /// ```
 ///
 /// Values containing non-static references are not permitted.
+#[derive(Clone)]
 pub struct AnyMap {
     data: HashMap<TypeId, Box<Any + 'static>, TypeIdHasher>,
 }
@@ -225,7 +255,7 @@ pub enum Entry<'a, V: 'a> {
     Vacant(VacantEntry<'a, V>),
 }
 
-impl<'a, V: 'static> OccupiedEntry<'a, V> {
+impl<'a, V: 'static + Clone> OccupiedEntry<'a, V> {
     /// Gets a reference to the value in the entry
     pub fn get(&self) -> &V {
         unsafe { self.entry.get().downcast_ref_unchecked() }
@@ -253,7 +283,7 @@ impl<'a, V: 'static> OccupiedEntry<'a, V> {
     }
 }
 
-impl<'a, V: 'static> VacantEntry<'a, V> {
+impl<'a, V: 'static + Clone> VacantEntry<'a, V> {
     /// Sets the value of the entry with the VacantEntry's key,
     /// and returns a mutable reference to it
     pub fn set(self, value: V) -> &'a mut V {
@@ -295,13 +325,13 @@ fn bench_get_present(b: &mut ::test::Bencher) {
 
 #[test]
 fn test_entry() {
-    #[derive(Show, PartialEq)] struct A(int);
-    #[derive(Show, PartialEq)] struct B(int);
-    #[derive(Show, PartialEq)] struct C(int);
-    #[derive(Show, PartialEq)] struct D(int);
-    #[derive(Show, PartialEq)] struct E(int);
-    #[derive(Show, PartialEq)] struct F(int);
-    #[derive(Show, PartialEq)] struct J(int);
+    #[derive(Show, PartialEq, Clone)] struct A(int);
+    #[derive(Show, PartialEq, Clone)] struct B(int);
+    #[derive(Show, PartialEq, Clone)] struct C(int);
+    #[derive(Show, PartialEq, Clone)] struct D(int);
+    #[derive(Show, PartialEq, Clone)] struct E(int);
+    #[derive(Show, PartialEq, Clone)] struct F(int);
+    #[derive(Show, PartialEq, Clone)] struct J(int);
 
     let mut map: AnyMap = AnyMap::new();
     assert_eq!(map.insert(A(10)), None);
@@ -356,4 +386,15 @@ fn test_entry() {
     }
     assert_eq!(map.get::<J>().unwrap(), &J(1000));
     assert_eq!(map.len(), 6);
+
+    // Cloning works as intended
+    let map2 = map.clone();
+    assert_eq!(map2.len(), 6);
+    assert_eq!(map2.get::<A>(), Some(&A(100)));
+    assert_eq!(map2.get::<B>(), Some(&B(200)));
+    assert_eq!(map2.get::<C>(), None);
+    assert_eq!(map2.get::<D>(), Some(&D(40)));
+    assert_eq!(map2.get::<E>(), Some(&E(50)));
+    assert_eq!(map2.get::<F>(), Some(&F(60)));
+    assert_eq!(map2.get::<J>(), Some(&J(1000)));
 }
